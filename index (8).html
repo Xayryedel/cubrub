@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rubik's Cube — Zero-G</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.170.0/build/three.module.js"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+/* ===================== SCENE ===================== */
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x010108);
+scene.fog = new THREE.FogExp2(0x02020c, 0.0018);
+
+const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 0.1, 2000);
+camera.position.set(0, 0.6, 11);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+/* ===================== LIGHTS ===================== */
+const ambient = new THREE.AmbientLight(0x334466, 0.55);
+scene.add(ambient);
+
+const key = new THREE.DirectionalLight(0xfff5e8, 1.35);
+key.position.set(6, 10, 8);
+scene.add(key);
+
+const fill = new THREE.DirectionalLight(0x88aaff, 0.45);
+fill.position.set(-7, 3, -5);
+scene.add(fill);
+
+const rim = new THREE.DirectionalLight(0xffaa88, 0.3);
+rim.position.set(0, -4, -8);
+scene.add(rim);
+
+/* ===================== STARFIELD ===================== */
+function createStars(count, radius, size, color) {
+  const geo = new THREE.BufferGeometry();
+  const pos = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    const r = radius * (0.4 + Math.random() * 0.6);
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    pos[i*3]   = r * Math.sin(phi) * Math.cos(theta);
+    pos[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+    pos[i*3+2] = r * Math.cos(phi);
+  }
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.PointsMaterial({
+    color,
+    size,
+    sizeAttenuation: true,
+    transparent: true,
+    opacity: 0.9,
+    depthWrite: false
+  });
+  return new THREE.Points(geo, mat);
+}
+
+scene.add(createStars(3500, 180, 0.35, 0xffffff));
+scene.add(createStars(1800, 120, 0.55, 0xaaccff));
+scene.add(createStars(600,  90,  0.9,  0xffeebb));
+
+/* Nebula sprites */
+function createNebula() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256; canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  const g = ctx.createRadialGradient(128,128,0, 128,128,128);
+  g.addColorStop(0, 'rgba(80,120,255,0.35)');
+  g.addColorStop(0.4, 'rgba(40,60,180,0.12)');
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,256,256);
+  const tex = new THREE.CanvasTexture(canvas);
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+  const group = new THREE.Group();
+  for (let i = 0; i < 12; i++) {
+    const s = new THREE.Sprite(mat.clone());
+    const r = 40 + Math.random() * 70;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    s.position.set(
+      r * Math.sin(phi) * Math.cos(theta),
+      r * Math.sin(phi) * Math.sin(theta) * 0.6,
+      r * Math.cos(phi)
+    );
+    const sc = 25 + Math.random() * 40;
+    s.scale.set(sc, sc, 1);
+    group.add(s);
+  }
+  return group;
+}
+scene.add(createNebula());
+
+/* ===================== CUBE ===================== */
+const COLORS = {
+  U: 0xf5f5f5,
+  D: 0xffd500,
+  F: 0x009b48,
+  B: 0x0046ad,
+  L: 0xff5800,
+  R: 0xb71234
+};
+
+const CUBE_SIZE = 0.98;
+const GAP = 0.04;
+const STEP = CUBE_SIZE + GAP;
+
+const materials = {
+  U: new THREE.MeshStandardMaterial({ color: COLORS.U, roughness: 0.25, metalness: 0.05 }),
+  D: new THREE.MeshStandardMaterial({ color: COLORS.D, roughness: 0.28, metalness: 0.05 }),
+  F: new THREE.MeshStandardMaterial({ color: COLORS.F, roughness: 0.28, metalness: 0.05 }),
+  B: new THREE.MeshStandardMaterial({ color: COLORS.B, roughness: 0.28, metalness: 0.05 }),
+  L: new THREE.MeshStandardMaterial({ color: COLORS.L, roughness: 0.28, metalness: 0.05 }),
+  R: new THREE.MeshStandardMaterial({ color: COLORS.R, roughness: 0.28, metalness: 0.05 }),
+  inside: new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.7, metalness: 0.1 })
+};
+
+// BoxGeometry material order: +x, -x, +y, -y, +z, -z  → R L U D F B
+function faceMaterials(x, y, z) {
+  return [
+    x ===  1 ? materials.R : materials.inside,
+    x === -1 ? materials.L : materials.inside,
+    y ===  1 ? materials.U : materials.inside,
+    y === -1 ? materials.D : materials.inside,
+    z ===  1 ? materials.F : materials.inside,
+    z === -1 ? materials.B : materials.inside
+  ];
+}
+
+const cubeGroup = new THREE.Group();
+scene.add(cubeGroup);
+
+const cubies = [];
+
+for (let x = -1; x <= 1; x++) {
+  for (let y = -1; y <= 1; y++) {
+    for (let z = -1; z <= 1; z++) {
+      if (x === 0 && y === 0 && z === 0) continue;
+
+      const geo = new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
+      const mesh = new THREE.Mesh(geo, faceMaterials(x, y, z));
+      mesh.position.set(x * STEP, y * STEP, z * STEP);
+
+      // black plastic edges
+      const edgeGeo = new THREE.BoxGeometry(CUBE_SIZE + 0.02, CUBE_SIZE + 0.02, CUBE_SIZE + 0.02);
+      const edgeMat = new THREE.MeshBasicMaterial({ color: 0x0a0a0e, side: THREE.BackSide });
+      const edge = new THREE.Mesh(edgeGeo, edgeMat);
+      mesh.add(edge);
+
+      cubeGroup.add(mesh);
+      cubies.push({ mesh, x, y, z });
+    }
+  }
+}
+
+/* ===================== ANIMATION ENGINE ===================== */
+let isAnimating = false;
+const MOVE_DURATION = 1.35;
+
+function easeInOutCubic(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function rotateLayer(axis, layer, dir) {
+  return new Promise(resolve => {
+    if (isAnimating) return resolve();
+    isAnimating = true;
+
+    const selected = cubies.filter(c => c[axis] === layer);
+    const startQuats = selected.map(c => c.mesh.quaternion.clone());
+    const startPos   = selected.map(c => c.mesh.position.clone());
+
+    const angle = dir * Math.PI / 2;
+    const axisVec = new THREE.Vector3(
+      axis === 'x' ? 1 : 0,
+      axis === 'y' ? 1 : 0,
+      axis === 'z' ? 1 : 0
+    );
+
+    let t = 0;
+    const clock = new THREE.Clock();
+
+    function step() {
+      t += clock.getDelta() / MOVE_DURATION;
+      if (t > 1) t = 1;
+      const e = easeInOutCubic(t);
+
+      selected.forEach((c, i) => {
+        const p = startPos[i].clone().applyQuaternion(
+          new THREE.Quaternion().setFromAxisAngle(axisVec, angle * e)
+        );
+        c.mesh.position.copy(p);
+
+        c.mesh.quaternion.copy(startQuats[i]).premultiply(
+          new THREE.Quaternion().setFromAxisAngle(axisVec, angle * e)
+        );
+      });
+
+      if (t < 1) {
+        requestAnimationFrame(step);
+      } else {
+        selected.forEach(c => {
+          let { x, y, z } = c;
+          if (axis === 'x') {
+            if (dir === 1) { const tmp = y; y = -z; z = tmp; }
+            else           { const tmp = y; y =  z; z = -tmp; }
+          } else if (axis === 'y') {
+            if (dir === 1) { const tmp = x; x =  z; z = -tmp; }
+            else           { const tmp = x; x = -z; z =  tmp; }
+          } else {
+            if (dir === 1) { const tmp = x; x = -y; y = tmp; }
+            else           { const tmp = x; x =  y; y = -tmp; }
+          }
+          c.x = Math.round(x);
+          c.y = Math.round(y);
+          c.z = Math.round(z);
+          c.mesh.position.set(c.x * STEP, c.y * STEP, c.z * STEP);
+        });
+        isAnimating = false;
+        resolve();
+      }
+    }
+    step();
+  });
+}
+
+const moves = {
+  R:  () => rotateLayer('x',  1,  1),
+  Rp: () => rotateLayer('x',  1, -1),
+  L:  () => rotateLayer('x', -1, -1),
+  Lp: () => rotateLayer('x', -1,  1),
+  U:  () => rotateLayer('y',  1,  1),
+  Up: () => rotateLayer('y',  1, -1),
+  D:  () => rotateLayer('y', -1, -1),
+  Dp: () => rotateLayer('y', -1,  1),
+  F:  () => rotateLayer('z',  1,  1),
+  Fp: () => rotateLayer('z',  1, -1),
+  B:  () => rotateLayer('z', -1, -1),
+  Bp: () => rotateLayer('z', -1,  1),
+};
+
+const scrambleRaw = [
+  'R','U','Rp','U','R','U2','Rp',
+  'F','R','U','Rp','Up','Fp',
+  'U','R','U','Rp','U','R','U2','Rp'
+];
+
+function expand(seq) {
+  const out = [];
+  for (const m of seq) {
+    if (m.endsWith('2')) {
+      const b = m.slice(0, -1);
+      out.push(b, b);
+    } else out.push(m);
+  }
+  return out;
+}
+
+const scrambleSeq = expand(scrambleRaw);
+const solveSeq = scrambleSeq.slice().reverse().map(m =>
+  m.endsWith('p') ? m.slice(0, -1) : m + 'p'
+);
+
+async function doSeq(seq) {
+  for (const m of seq) {
+    await moves[m]();
+    await new Promise(r => setTimeout(r, 140));
+  }
+}
+
+async function loop() {
+  while (true) {
+    await doSeq(scrambleSeq);
+    await new Promise(r => setTimeout(r, 700));
+    await doSeq(solveSeq);
+    await new Promise(r => setTimeout(r, 1300));
+  }
+}
+
+setTimeout(loop, 900);
+
+/* ===================== FLOATING MOTION ===================== */
+let time = 0;
+function updateFloat(dt) {
+  time += dt;
+  cubeGroup.rotation.x = Math.sin(time * 0.18) * 0.35 + 0.25;
+  cubeGroup.rotation.y = time * 0.22;
+  cubeGroup.rotation.z = Math.sin(time * 0.13) * 0.2;
+  cubeGroup.position.y = Math.sin(time * 0.4) * 0.25;
+}
+
+/* ===================== RENDER LOOP ===================== */
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = clock.getDelta();
+  updateFloat(dt);
+  renderer.render(scene, camera);
+}
+animate();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
