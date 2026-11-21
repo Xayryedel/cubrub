@@ -33,25 +33,38 @@ const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'hi
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.15;
+renderer.toneMappingExposure = 1.35;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 
 /* ===================== LIGHTS ===================== */
-const ambient = new THREE.AmbientLight(0x334466, 0.55);
+const ambient = new THREE.AmbientLight(0x1a2238, 0.3);
 scene.add(ambient);
 
-const key = new THREE.DirectionalLight(0xfff5e8, 1.35);
-key.position.set(6, 10, 8);
+const key = new THREE.DirectionalLight(0xffffff, 2.6);
+key.position.set(4, 8, 6);
 scene.add(key);
 
-const fill = new THREE.DirectionalLight(0x88aaff, 0.45);
+const fill = new THREE.DirectionalLight(0x88aaff, 0.75);
 fill.position.set(-7, 3, -5);
 scene.add(fill);
 
-const rim = new THREE.DirectionalLight(0xffaa88, 0.3);
-rim.position.set(0, -4, -8);
+const rim = new THREE.DirectionalLight(0xffbb99, 0.6);
+rim.position.set(2, -4, -8);
 scene.add(rim);
+
+/* Strong moving specular lights for sharp glints */
+const spark = new THREE.PointLight(0xffffff, 12.0, 28, 1.2);
+spark.position.set(3.5, 4.5, 5);
+scene.add(spark);
+
+const spark2 = new THREE.PointLight(0xcce0ff, 7.0, 24, 1.3);
+spark2.position.set(-4, 3, 4);
+scene.add(spark2);
+
+const spark3 = new THREE.PointLight(0xffe0c0, 5.0, 20, 1.5);
+spark3.position.set(0, 6, -3);
+scene.add(spark3);
 
 /* ===================== STARFIELD ===================== */
 function createStars(count, radius, size, color) {
@@ -127,15 +140,65 @@ const CUBE_SIZE = 0.98;
 const GAP = 0.04;
 const STEP = CUBE_SIZE + GAP;
 
+/* --- ultra glossy plastic stickers --- */
+function makeSticker(color) {
+  return new THREE.MeshPhysicalMaterial({
+    color,
+    roughness: 0.06,          // almost mirror
+    metalness: 0.0,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.03, // sharp clearcoat highlights
+    reflectivity: 1.0,
+    envMapIntensity: 2.8,
+    specularIntensity: 1.0,
+    sheen: 0.4,
+    sheenColor: new THREE.Color(0xffffff),
+    sheenRoughness: 0.15
+  });
+}
+
 const materials = {
-  U: new THREE.MeshStandardMaterial({ color: COLORS.U, roughness: 0.25, metalness: 0.05 }),
-  D: new THREE.MeshStandardMaterial({ color: COLORS.D, roughness: 0.28, metalness: 0.05 }),
-  F: new THREE.MeshStandardMaterial({ color: COLORS.F, roughness: 0.28, metalness: 0.05 }),
-  B: new THREE.MeshStandardMaterial({ color: COLORS.B, roughness: 0.28, metalness: 0.05 }),
-  L: new THREE.MeshStandardMaterial({ color: COLORS.L, roughness: 0.28, metalness: 0.05 }),
-  R: new THREE.MeshStandardMaterial({ color: COLORS.R, roughness: 0.28, metalness: 0.05 }),
-  inside: new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.7, metalness: 0.1 })
+  U: makeSticker(COLORS.U),
+  D: makeSticker(COLORS.D),
+  F: makeSticker(COLORS.F),
+  B: makeSticker(COLORS.B),
+  L: makeSticker(COLORS.L),
+  R: makeSticker(COLORS.R),
+  inside: new THREE.MeshStandardMaterial({ color: 0x0a0a10, roughness: 0.9, metalness: 0.2 })
 };
+
+/* Strong environment map for reflections */
+(function createEnvMap() {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const envScene = new THREE.Scene();
+  envScene.add(new THREE.AmbientLight(0xffffff, 1.0));
+
+  const lights = [
+    { c: 0xffffff, p: [ 10, 15,  8], i: 12 },
+    { c: 0xffffff, p: [-12,  8, -6], i: 8 },
+    { c: 0xaaccff, p: [  5, -6, 12], i: 6 },
+    { c: 0xffe0c0, p: [  0, 18,  0], i: 10 },
+    { c: 0xffffff, p: [-8,  4, 10], i: 5 }
+  ];
+  lights.forEach(l => {
+    const pl = new THREE.PointLight(l.c, l.i, 60);
+    pl.position.set(...l.p);
+    envScene.add(pl);
+  });
+
+  // bright ground plane reflection
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(40, 40),
+    new THREE.MeshBasicMaterial({ color: 0x223355 })
+  );
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -8;
+  envScene.add(ground);
+
+  const envMap = pmrem.fromScene(envScene, 0.02).texture;
+  scene.environment = envMap;
+  pmrem.dispose();
+})();
 
 // BoxGeometry material order: +x, -x, +y, -y, +z, -z  → R L U D F B
 function faceMaterials(x, y, z) {
@@ -309,6 +372,19 @@ function updateFloat(dt) {
   cubeGroup.rotation.y = time * 0.22;
   cubeGroup.rotation.z = Math.sin(time * 0.13) * 0.2;
   cubeGroup.position.y = Math.sin(time * 0.4) * 0.25;
+
+  // moving specular lights → live highlights on the stickers
+  spark.position.x = Math.sin(time * 0.7) * 5 + 2;
+  spark.position.y = Math.cos(time * 0.5) * 3 + 4;
+  spark.position.z = Math.cos(time * 0.6) * 4 + 5;
+
+  spark2.position.x = Math.cos(time * 0.55) * -5;
+  spark2.position.y = Math.sin(time * 0.4) * 2 + 3;
+  spark2.position.z = Math.sin(time * 0.65) * 3 + 3;
+
+  spark3.position.x = Math.sin(time * 0.45) * 3;
+  spark3.position.y = 5 + Math.cos(time * 0.6) * 2;
+  spark3.position.z = Math.cos(time * 0.5) * -4;
 }
 
 /* ===================== RENDER LOOP ===================== */
